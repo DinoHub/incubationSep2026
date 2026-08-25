@@ -1,0 +1,31 @@
+services:
+  mcp-server:
+    build: .
+    image: {{IMAGE_NAME}}:latest
+    ports:
+      - "{{PORT}}:{{PORT}}"          # host:container
+    environment:
+      PORT: "{{PORT}}"
+# {{IF_WORKDIR}}
+    volumes:
+      - ./{{WORK_DIR}}:/app/{{WORK_DIR}}
+# {{END_WORKDIR}}
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Runs the in-process check, then exits. Profile-gated so a plain `up` skips
+  # it. It does not need mcp-server running — it runs the server in-process.
+  test:
+    build: .
+    image: {{IMAGE_NAME}}:latest
+    profiles: ["test"]
+# {{IF_WORKDIR}}
+    volumes:
+      - ./{{WORK_DIR}}:/app/{{WORK_DIR}}
+# {{END_WORKDIR}}
+    command: ["python", "test_server.py"]

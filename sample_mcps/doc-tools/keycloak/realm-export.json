@@ -1,0 +1,126 @@
+{
+  "realm": "mcp-doc-tools",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 86400,
+  "roles": {
+    "realm": [
+      {
+        "name": "documents:read",
+        "description": "May call the read-only tools"
+      },
+      {
+        "name": "documents:write",
+        "description": "May call the tools that change state"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "agent-reader",
+      "name": "Read-only caller (machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "reader-dev-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "authorizationServicesEnabled": false
+    },
+    {
+      "clientId": "agent-writer",
+      "name": "Read-write caller (machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "writer-dev-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "authorizationServicesEnabled": false
+    },
+    {
+      "clientId": "claude-code",
+      "name": "Interactive MCP host (OAuth 2.1 + PKCE)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:8123/callback",
+        "http://127.0.0.1:8123/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-agent-reader",
+      "enabled": true,
+      "serviceAccountClientId": "agent-reader",
+      "realmRoles": [
+        "documents:read"
+      ]
+    },
+    {
+      "username": "service-account-agent-writer",
+      "enabled": true,
+      "serviceAccountClientId": "agent-writer",
+      "realmRoles": [
+        "documents:read",
+        "documents:write"
+      ]
+    },
+    {
+      "username": "dev-reader",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Reader",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-reader-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-doc-tools",
+        "documents:read"
+      ],
+      "requiredActions": [],
+      "email": "dev-reader@example.invalid"
+    },
+    {
+      "username": "dev-writer",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Writer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-writer-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-mcp-doc-tools",
+        "documents:read",
+        "documents:write"
+      ],
+      "requiredActions": [],
+      "email": "dev-writer@example.invalid"
+    }
+  ]
+}

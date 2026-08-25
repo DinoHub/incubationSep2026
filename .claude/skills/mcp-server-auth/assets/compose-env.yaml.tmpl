@@ -1,0 +1,18 @@
+      # Defaults point at the bundled Keycloak, so `docker compose --profile dev
+      # up` works with no configuration. Set OIDC_ISSUER in .env to aim the same
+      # image at a real provider; see .env.example.
+      #
+      # The issuer is spelled localhost, not keycloak, on purpose. It is the URL
+      # a *client* uses: it appears in the token's `iss` claim, and this server
+      # publishes it so an MCP host can discover where to sign in. A host runs
+      # on your machine and cannot resolve a Docker service name, so an issuer
+      # of http://keycloak:8080 would send it somewhere it cannot reach.
+      OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:{{KEYCLOAK_PORT}}/realms/{{REALM}}}
+      # ...which leaves this container unable to resolve its own issuer, so
+      # point key discovery at the Docker network name instead. Unset it when
+      # you switch OIDC_ISSUER to a real provider — there, both sides of the
+      # conversation use the same public URL and no override is needed.
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL-http://keycloak:8080/realms/{{REALM}}/protocol/openid-connect/certs}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_ROLES_CLAIM: ${OIDC_ROLES_CLAIM:-realm_access.roles}
+      SERVER_URL: ${SERVER_URL:-http://localhost:{{PORT}}}

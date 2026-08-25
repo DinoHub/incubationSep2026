@@ -1,0 +1,67 @@
+"""In-process check of {{SERVER_NAME}}.
+
+Client talks to the server object in memory — no subprocess, no network — so
+this is fast and runs with the container stopped.
+
+Each check is named and the script exits non-zero if any fails, because a script
+that only prints values cannot tell you anything went wrong. Run it with:
+
+    docker compose run --rm test
+"""
+
+import asyncio
+import sys
+
+from mcp import Client
+
+from {{MODULE}} import mcp
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"PASS  {name}")
+    else:
+        print(f"FAIL  {name}" + (f" — {detail}" if detail else ""))
+        FAILURES.append(name)
+
+
+async def main() -> None:
+    async with Client(mcp) as client:
+        listing = await client.list_tools()
+        names = [t.name for t in listing.tools]
+        print("Tools:", names)
+        check("every expected tool is registered",
+              {"ping", "echo"} <= set(names), f"got {names}")
+        check("every tool has a description the model can read",
+              all(t.description for t in listing.tools),
+              f"missing: {[t.name for t in listing.tools if not t.description]}")
+
+        r = await client.call_tool("ping", {})
+        check("ping succeeds", not r.is_error, str(r.content))
+        check("ping returns ok", "ok" in str(r.structured_content), repr(r.structured_content))
+
+        r = await client.call_tool("echo", {"text": "hello from MCP", "upper": True})
+        check("echo applies the upper flag",
+              "HELLO FROM MCP" in str(r.structured_content), repr(r.structured_content))
+
+        # The error path matters as much as the happy path: this is what the
+        # model reads and recovers from.
+        r = await client.call_tool("echo", {"text": "   "})
+        msg = r.content[0].text if r.content else ""
+        check("empty text is flagged as an error", r.is_error, repr(msg))
+        check("the error message reaches the caller intact", "must not be empty" in msg,
+              f"got {msg!r} — if this is bare 'Error executing tool', the tool "
+              f"raised something other than ToolError and its message was dropped")
+
+        # TODO: add a check per tool you write, including one bad-input case.
+
+    if FAILURES:
+        print(f"\n{len(FAILURES)} check(s) failed: {', '.join(FAILURES)}")
+        sys.exit(1)
+    print("\nAll checks passed.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

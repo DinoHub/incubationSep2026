@@ -1,0 +1,72 @@
+# ---- Paste near the top of the existing test_server.py -------------------
+#
+# Why this exists: once tools call require_role(), the in-process client has no
+# identity, so every guarded tool fails with "the caller is not authenticated"
+# and the fast test becomes useless. Setting the auth context directly restores
+# it — and does better than before, because one in-memory run can now check both
+# the allow and the deny path for every tool, in about a second, with no
+# Keycloak and no network.
+#
+# What this canNOT check: authentication. The in-process client never passes
+# through the HTTP layer where tokens are verified, so a broken verifier still
+# looks fine here. test_auth.py is what covers that. Run both.
+
+from mcp.server.auth.middleware.auth_context import auth_context_var
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+
+ROLE_READ = "{{ROLE_READ}}"
+ROLE_WRITE = "{{ROLE_WRITE}}"
+
+
+def as_identity(subject: str, roles: list[str]) -> None:
+    """Make subsequent in-process tool calls run as `subject` holding `roles`.
+
+    This is the same contextvar the server's auth middleware sets from a
+    verified token, so require_role() cannot tell the difference. That is the
+    point — and also why this belongs only in a test.
+    """
+    auth_context_var.set(AuthenticatedUser(AccessToken(
+        token="in-process-test",
+        client_id=subject,
+        scopes=roles,
+        expires_at=None,
+        subject=subject,
+    )))
+
+
+async def check_denied(client, name: str, tool: str, args: dict, role: str) -> None:
+    """Assert a tool refuses the current identity, and says which role it wanted.
+
+    Checking the message and not just is_error matters: if the tool raised
+    anything other than ToolError, the text collapses to "Error executing tool
+    <tool>" and the caller is told it failed without being told why.
+    """
+    r = await client.call_tool(tool, args)
+    msg = r.content[0].text if r.content else ""
+    check(f"{name} is denied {tool}", r.is_error, msg[:120])
+    check(f"the {tool} denial names {role}", role in msg, f"got {msg[:120]!r}")
+
+
+# ---- Then structure main() like this ------------------------------------
+#
+#     async def main() -> None:
+#         # Reader: read-only tools succeed, everything else is refused.
+#         as_identity("test-reader", [ROLE_READ])
+#         async with Client(mcp) as client:
+#             r = await client.call_tool("<a read tool>", {})
+#             check("reader may call <a read tool>", not r.is_error, str(r.content))
+#             await check_denied(client, "reader", "<a write tool>", {...}, ROLE_WRITE)
+#
+#         # Writer: everything succeeds.
+#         as_identity("test-writer", [ROLE_READ, ROLE_WRITE])
+#         async with Client(mcp) as client:
+#             r = await client.call_tool("<a write tool>", {...})
+#             check("writer may call <a write tool>", not r.is_error, str(r.content))
+#
+#         # No identity: every guarded tool refuses. This is the case a caller
+#         # hits when the token is valid but carries no roles at all.
+#         auth_context_var.set(None)
+#         async with Client(mcp) as client:
+#             r = await client.call_tool("<a read tool>", {})
+#             check("an unauthenticated caller is refused", r.is_error, str(r.content))

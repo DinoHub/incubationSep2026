@@ -1,0 +1,117 @@
+# {{SERVER_NAME}}
+
+An MCP server built on the `mcp` Python SDK v2, served over Streamable HTTP in
+Docker, with an in-process test script.
+
+## What is here
+
+| File | What it does |
+| --- | --- |
+| `{{MODULE}}.py` | The server and its tools. This is the file you edit. |
+| `http_server.py` | Serves the same server object over Streamable HTTP. |
+| `healthcheck.py` | Container healthcheck; confirms the port is open. |
+| `test_server.py` | Talks to the server in memory. No network, no subprocess. |
+# {{IF_WORKDIR}}
+| `seed_data.py` | Puts starting data in `{{WORK_DIR}}/`. |
+# {{END_WORKDIR}}
+| `requirements.txt` | Python dependencies. |
+| `Dockerfile` | Python 3.12 slim, non-root user. |
+| `docker-compose.yaml` | The server and a profile-gated `test` service. |
+
+## Getting it running
+
+```bash
+docker compose build
+# {{IF_WORKDIR}}
+docker compose run --rm mcp-server python seed_data.py
+# {{END_WORKDIR}}
+docker compose run --rm test        # in-process check, no server needed
+docker compose up                  # serves http://localhost:{{PORT}}/mcp
+```
+
+## Connecting Claude to it
+
+### Over HTTP, against the container
+
+With `docker compose up` running, register the URL with Claude Code:
+
+```bash
+claude mcp add --transport http {{SLUG}} http://localhost:{{PORT}}/mcp
+```
+
+Then check that it actually answered:
+
+```bash
+claude mcp list          # look for: {{SLUG}} ... Connected
+```
+
+`claude mcp add` records the URL whether or not anything is listening, so it
+succeeding does not mean the server is reachable — `claude mcp list` is the step
+that tells you. If it reports a failure, the container is usually not up.
+
+Inside a session, `/mcp` lists the connected servers, and `claude mcp get
+{{SLUG}}` prints one server's status, scope, and the command to remove it.
+
+`--scope` decides who gets the server:
+
+| Scope | Where it is stored | Who sees it |
+| --- | --- | --- |
+| `local` (the default) | `~/.claude.json`, keyed to the current directory | You, in this directory only |
+| `user` | `~/.claude.json`, not tied to a directory | You, in every directory |
+| `project` | `.mcp.json` in the project root | Anyone who checks out the repo |
+
+Use `--scope project` to share it with a team and commit the `.mcp.json` it
+writes:
+
+```json
+{
+  "mcpServers": {
+    "{{SLUG}}": {
+      "type": "http",
+      "url": "http://localhost:{{PORT}}/mcp"
+    }
+  }
+}
+```
+
+Remove it with `claude mcp remove {{SLUG}}`, adding `-s project` if you used
+project scope.
+
+### Over stdio, without the container
+
+A host that launches servers as a subprocess needs no container and no port.
+Give it absolute paths — the host does not run the command from this directory:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+claude mcp add {{SLUG}} -- "$PWD/.venv/bin/python" "$PWD/{{MODULE}}.py"
+```
+
+stdio is the default transport, which is why this needs no `--transport` flag.
+
+### Claude Desktop
+
+Desktop registers a URL like this one through **Settings → Connectors → Add
+custom connector**, rather than through the CLI above.
+
+### A note on the open port
+
+There is no authentication on that port. That is fine on localhost and not fine
+on a public interface; put it behind OAuth 2.1 before exposing it.
+
+## Quick reference
+
+| Task | Command |
+| --- | --- |
+| Build the image | `docker compose build` |
+# {{IF_WORKDIR}}
+| Seed the working directory | `docker compose run --rm mcp-server python seed_data.py` |
+# {{END_WORKDIR}}
+| Serve over HTTP | `docker compose up` |
+| Test in-process | `docker compose run --rm test` |
+| Serve over stdio | `python {{MODULE}}.py` |
+| Register with Claude Code | `claude mcp add --transport http {{SLUG}} http://localhost:{{PORT}}/mcp` |
+| Check it connected | `claude mcp list` |
+| Unregister | `claude mcp remove {{SLUG}}` |
+| Stop everything | `docker compose down` |

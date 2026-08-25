@@ -12,7 +12,7 @@ verifies tokens with a locally-cached signing key instead of calling
 Keycloak's introspection endpoint on every request; both are legitimate, and
 the tutorial explains the trade-off in Step 2.
 
-The setup was run against **Keycloak 26.0**, **`mcp` 2.0.0**, and **PyJWT
+The setup was run against **Keycloak 26.0**, **`mcp` 2.1.0**, and **PyJWT
 2.13** (current stable lines as of August 2026) before being written down.
 
 ## Authentication vs. authorization, for an agent specifically
@@ -201,6 +201,11 @@ from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.settings import AuthSettings
 
+# The only exception type whose message reaches the caller. Anything else is
+# re-raised as UnexpectedToolError with the text replaced by a bare "Error
+# executing tool <name>" — which would silently gut every denial below.
+from mcp.server.mcpserver.exceptions import ToolError
+
 # Where the agents' files live. Confining every path to one folder is what
 # stops an authenticated-but-misbehaving agent from touching anything else.
 FILES_DIR = Path(os.environ.get("FILES_DIR", "files")).resolve()
@@ -282,14 +287,14 @@ def _require_role(role: str) -> AccessToken:
     if token is None or role not in token.scopes:
         who = token.subject if token else "unknown"
         roles = token.scopes if token else []
-        raise ValueError(f"'{who}' has roles {roles}, but this action needs '{role}'.")
+        raise ToolError(f"'{who}' has roles {roles}, but this action needs '{role}'.")
     return token
 
 
 def _resolve(name: str) -> Path:
     p = (FILES_DIR / name).resolve()
     if p.parent != FILES_DIR:
-        raise ValueError(f"{name!r} is outside the files directory.")
+        raise ToolError(f"{name!r} is outside the files directory.")
     return p
 
 
@@ -313,7 +318,7 @@ def read_file(name: str) -> str:
     _require_role("tools:read")
     p = _resolve(name)
     if not p.exists():
-        raise ValueError(f"No such file: {name!r}")
+        raise ToolError(f"No such file: {name!r}")
     return p.read_text()
 
 
@@ -332,7 +337,7 @@ def delete_file(name: str) -> dict:
     _require_role("tools:write")
     p = _resolve(name)
     if not p.exists():
-        raise ValueError(f"No such file: {name!r}")
+        raise ToolError(f"No such file: {name!r}")
     p.unlink()
     return {"deleted": name}
 
@@ -356,11 +361,17 @@ Four details worth calling out:
   from inside any tool without threading a token through every function
   signature — the same way `mcp_tutorial`'s tools never had to know about
   transport, just about images.
-- **A `ValueError` inside a tool becomes a tool-call error, not a crash.**
-  Same convention as `mcp_tutorial`'s `crop`: raising is how a tool hands the
-  model (or script) a readable reason to react to, instead of a stack trace.
-  This is also *how* authorization failures surface here — there's no
-  per-tool HTTP status in MCP, only a JSON-RPC result marked `is_error`.
+- **The denial is a `ToolError`, and the type is load-bearing.** Raising is
+  how a tool hands the model (or script) a readable reason to react to instead
+  of a stack trace, and it's also *how* authorization failures surface here —
+  there's no per-tool HTTP status in MCP, only a JSON-RPC result marked
+  `is_error`. But only `ToolError` keeps your message: the SDK re-raises
+  anything else as `UnexpectedToolError` and replaces the text with a bare
+  `Error executing tool write_file`. Swap the `ToolError` in `_require_role`
+  for a `ValueError` and every denial in this tutorial still *happens* —
+  `is_error` is still true, nothing crashes, nothing warns — while the caller
+  stops being told which role it was missing. That's the difference between a
+  boundary an agent can recover from and one it can only bounce off.
 - **`required_scopes=[]` at the server level, real checks inside each tool.**
   The official tutorial's example server requires the same scope for both of
   its tools, so it never needs finer granularity. This one has two roles and
@@ -787,7 +798,12 @@ token, each agent's allowed and disallowed actions — the two ways they fail
 are different enough to need two different techniques: authentication is
 checked with a raw HTTP request (since the failure happens before an MCP
 session ever opens), authorization with a real `mcp.Client` call (since the
-failure happens *inside* one):
+failure happens *inside* one).
+
+Each denial is checked twice, on purpose: once that it happened, and once that
+its message survived. `is_error` alone cannot tell a useful denial from one
+whose text the SDK replaced with `Error executing tool write_file`, and that
+failure is silent — see the `ToolError` note in Step 2.
 
 ```python
 import asyncio
@@ -862,6 +878,13 @@ async def main() -> None:
 
     r = await call(reader_token, "write_file", {"name": "note.txt", "content": "hello"})
     check("reader cannot write (tool error)", r.is_error)
+    # Check the message, not just the flag. If _require_role raised anything
+    # other than ToolError, the text collapses to "Error executing tool
+    # write_file" — the caller is told it failed and never told why, while an
+    # is_error-only check above still passes. That is the exact bug this line
+    # exists to catch.
+    check("the write denial names the missing role",
+          "tools:write" in (r.content[0].text if r.content else ""))
 
     r = await call(writer_token, "write_file", {"name": "note.txt", "content": "hello from the writer agent"})
     check("writer can write", not r.is_error)
@@ -877,6 +900,8 @@ async def main() -> None:
 
     r = await call(reader_token, "delete_file", {"name": "note.txt"})
     check("reader cannot delete (tool error)", r.is_error)
+    check("the delete denial names the missing role",
+          "tools:write" in (r.content[0].text if r.content else ""))
 
     r = await call(writer_token, "delete_file", {"name": "note.txt"})
     check("writer can delete", not r.is_error)
@@ -903,10 +928,12 @@ PASS  no token is rejected (401)
 PASS  garbage token is rejected (401)
 PASS  reader can list files
 PASS  reader cannot write (tool error)
+PASS  the write denial names the missing role
 PASS  writer can write
 PASS  writer can read its own file (content matches)
 PASS  reader can read the writer's file
 PASS  reader cannot delete (tool error)
+PASS  the delete denial names the missing role
 PASS  writer can delete
 
 All checks passed.

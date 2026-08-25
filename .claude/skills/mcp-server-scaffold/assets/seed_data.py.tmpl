@@ -1,0 +1,19 @@
+"""Put a starting file in the working directory so the tools have something to
+act on.
+
+Run it in a throwaway container; the volume mount means the file lands in
+./{{WORK_DIR}} on your host:
+
+    docker compose run --rm mcp-server python seed_data.py
+"""
+
+import os
+from pathlib import Path
+
+WORK_DIR = Path(os.environ.get("{{WORK_DIR_ENV}}", "{{WORK_DIR}}")).resolve()
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+# TODO: replace this with whatever sample data your tools actually need.
+out = WORK_DIR / "sample.txt"
+out.write_text("Sample data for {{SERVER_NAME}}.\n", encoding="utf-8")
+print(f"Created {out} ({out.stat().st_size} bytes)")

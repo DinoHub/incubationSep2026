@@ -4,7 +4,7 @@ This guide builds an image-editing MCP server (crop, blur, resize, etc.),
 runs it in Docker, tests it, and wires it to a small **agent** that lets a model
 decide which tools to call.
 
-The server code was run against **`mcp` 2.0.0** (the current stable line as of
+The server code was run against **`mcp` 2.1.0** (the current stable line as of
 August 2026) before being written down.
 
 ## What an MCP server actually is
@@ -38,6 +38,18 @@ The high-level class was renamed from `FastMCP` to `MCPServer`. The decorators
 (`@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()`) work the same way. If you
 copy a v1 example and get an `ImportError` on `fastmcp`, this is why.
 
+The second v2 change is quieter and costs more time, because nothing errors: a
+tool that raises anything other than `ToolError` has its message thrown away.
+The SDK catches the exception and re-raises it as `UnexpectedToolError`, so the
+caller is told the call failed and given no reason why.
+
+```python
+from mcp.server.mcpserver.exceptions import ToolError  # not exported from mcp or mcp.server
+```
+
+That import path is the only one that works. Step 1 uses it for every failure a
+model is meant to read and recover from, and Step 3 tests for it.
+
 ## Prerequisites
 
 - **Docker** with Compose (Docker Desktop, or Docker Engine + the compose plugin).
@@ -68,6 +80,10 @@ from PIL import Image, ImageFilter
 from pydantic import BaseModel
 
 from mcp.server import MCPServer
+
+# The one exception type whose message reaches the model. Raising anything else
+# gets it replaced with a bare "Error executing tool <name>".
+from mcp.server.mcpserver.exceptions import ToolError
 
 # The one directory every tool is allowed to touch.
 IMAGE_DIR = Path(os.environ.get("IMAGE_DIR", "images")).resolve()
@@ -102,14 +118,14 @@ def _resolve(name: str) -> Path:
     """Resolve a name to a path, refusing anything outside IMAGE_DIR."""
     p = (IMAGE_DIR / name).resolve()
     if p.parent != IMAGE_DIR:
-        raise ValueError(f"{name!r} is outside the image directory.")
+        raise ToolError(f"{name!r} is outside the image directory.")
     return p
 
 
 def _open(name: str) -> Image.Image:
     p = _resolve(name)
     if not p.exists():
-        raise ValueError(f"No such image: {name!r}. Call list_images to see what's there.")
+        raise ToolError(f"No such image: {name!r}. Call list_images to see what's there.")
     return Image.open(p)
 
 
@@ -152,7 +168,7 @@ def crop(name: str, left: int, top: int, right: int, bottom: int, output: str | 
     """Crop an image to the box (left, top, right, bottom) in pixels."""
     img = _open(name)
     if right <= left or bottom <= top:
-        raise ValueError("Need right > left and bottom > top.")
+        raise ToolError("Need right > left and bottom > top.")
     return _save(img.crop((left, top, right, bottom)), output or _default_output(name, "crop"))
 
 
@@ -168,7 +184,7 @@ def resize(name: str, width: int, height: int, output: str | None = None) -> Ima
     """Resize an image to an exact width and height in pixels."""
     img = _open(name)
     if width < 1 or height < 1:
-        raise ValueError("Width and height must be positive.")
+        raise ToolError("Width and height must be positive.")
     return _save(img.resize((width, height)), output or _default_output(name, "resized"))
 
 
@@ -199,8 +215,13 @@ Three details worth calling out:
   the tool does and how the parameter behaves. Vague docstrings mislead it.
 - **Return a typed object for structured output.** Returning `ImageResult`
   gives the host a schema and structured content it can parse, not just text.
-- **Raise to signal a problem.** A raised exception comes back to the model as a
+- **Raise `ToolError` to signal a problem.** It comes back to the model as a
   readable error it can react to — here, by fixing its crop box and retrying.
+  The exception type matters: a bare `ValueError` is still reported as a failed
+  call, but its message is dropped and replaced with `Error executing tool
+  crop`, which leaves the model nothing to act on. Reserve the bare kind for
+  genuine bugs, where wrapping is what you want — it keeps tracebacks and
+  internal details out of the model's context.
 
 A sample image to edit, `create_sample.py`:
 
@@ -237,8 +258,11 @@ if __name__ == "__main__":
     mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
 ```
 
-`healthcheck.py` — a plain GET to `/mcp` returns 406 (the endpoint needs MCP's
-own headers), so the check just confirms the port is open. Stdlib only:
+`healthcheck.py` — `/mcp` rejects a plain GET, because the endpoint needs MCP's
+own headers and session handling. It does so with a status that depends on what
+you send: 406 with no `Accept` header, 400 with `Accept: */*`, which is what curl
+sends by default. Don't key a check to either number — just confirm the port is
+open. Stdlib only:
 
 ```python
 import os, socket, sys
@@ -394,6 +418,11 @@ async def main() -> None:
         )
         print("bad crop is_error ->", r.is_error)
         print("bad crop message ->", r.content[0].text)
+        # Check the message itself, not just that the call failed. If crop had
+        # raised ValueError instead of ToolError, is_error would still be True
+        # while the text collapsed to "Error executing tool crop" — a passing
+        # check over a tool the model can no longer recover from.
+        assert "right > left" in r.content[0].text, "the error message was dropped"
 
 
 if __name__ == "__main__":
@@ -515,9 +544,12 @@ docker compose run --rm test
 ```
 
 You'll see the tools listed, the edits producing new files in `./images`, and
-the bad crop returning `is_error = True` with the message text rather than
-crashing. That last part is the intended way to signal a failure the model
-should read and recover from.
+the bad crop returning `is_error = True` with `Need right > left and bottom >
+top.` rather than crashing. That last part is the intended way to signal a
+failure the model should read and recover from — and the reason the script
+asserts on the message text. Swap that `ToolError` back to a `ValueError` and
+the assertion fires, which is the fastest way to see the difference for
+yourself.
 
 ## Step 7 — Drive it with an agent
 

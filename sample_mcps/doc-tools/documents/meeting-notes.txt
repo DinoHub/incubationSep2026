@@ -1,0 +1,6 @@
+Team sync, 12 August
+Attending: Ana, Bo, Chen
+
+Decision: ship the importer behind a flag.
+Open question: who owns the migration rollback?
+Action: Bo to draft the rollback plan by Friday.

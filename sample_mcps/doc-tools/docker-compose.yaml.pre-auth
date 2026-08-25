@@ -1,0 +1,27 @@
+services:
+  mcp-server:
+    build: .
+    image: mcp-doc-tools:latest
+    ports:
+      - "8000:8000"          # host:container
+    environment:
+      PORT: "8000"
+    volumes:
+      - ./documents:/app/documents
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Runs the in-process check, then exits. Profile-gated so a plain `up` skips
+  # it. It does not need mcp-server running — it runs the server in-process.
+  test:
+    build: .
+    image: mcp-doc-tools:latest
+    profiles: ["test"]
+    volumes:
+      - ./documents:/app/documents
+    command: ["python", "test_server.py"]

@@ -1,0 +1,67 @@
+{
+  "skill_name": "mcp-server-scaffold",
+  "evals": [
+    {
+      "id": 0,
+      "name": "pdf-tools-workdir",
+      "prompt": "I want to build an MCP server that wraps our internal PDF handling so Claude can pull page counts and extract the text from PDFs sitting in a shared folder. Set it up so it runs in Docker, and I want to be able to test it without spinning up the whole thing.",
+      "expected_output": "A complete runnable project: server module with pypdf-backed tools confined to one mounted directory, http entrypoint, healthcheck, in-process test script, Dockerfile, docker-compose with a test profile. Uses mcp SDK v2 (MCPServer), transport args on run(), pypdf in requirements.",
+      "files": [],
+      "assertions": [
+        "Transport and networking arguments are passed to mcp.run(), not to the MCPServer constructor",
+        "Compose has a profile-gated test service, so a plain `up` does not run the tests",
+        "Dockerfile COPYs every runnable file that a compose service invokes, including the test script",
+        "Test script checks is_error on a deliberately bad call instead of expecting a raised exception",
+        "Healthcheck checks that the TCP port accepts a connection rather than making an HTTP GET to /mcp",
+        "Every tool has a docstring that says what each parameter does, not only what the tool does",
+        "Tools raise ToolError from mcp.server.mcpserver.exceptions, so the failure message actually reaches the model instead of being replaced by \"Error executing tool <name>\"",
+        "The test asserts on the error message text, not only on is_error, so a swallowed message is caught",
+        "The MCPServer instructions argument is filled in with real guidance, not left as a TODO",
+        "File access is confined to one directory: paths are resolved and anything outside is refused",
+        "Compose mounts the shared PDF folder as a host volume, so files on the host are visible to the tools",
+        "Provides a page-count tool and a text-extraction tool, both with typed return values"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "github-api-no-workdir",
+      "prompt": "set up an mcp server that hits the github rest api - i want tools to list my open PRs and get the diff for one of them. needs to run in docker. no idea what the current python sdk looks like",
+      "expected_output": "A complete runnable project with no filesystem working directory or volume mount, httpx in requirements, a token read from the environment, tools with clear docstrings, and the same container/test scaffolding. Uses mcp SDK v2 (MCPServer, not FastMCP).",
+      "files": [],
+      "assertions": [
+        "Transport and networking arguments are passed to mcp.run(), not to the MCPServer constructor",
+        "Compose has a profile-gated test service, so a plain `up` does not run the tests",
+        "Dockerfile COPYs every runnable file that a compose service invokes, including the test script",
+        "Test script checks is_error on a deliberately bad call instead of expecting a raised exception",
+        "Healthcheck checks that the TCP port accepts a connection rather than making an HTTP GET to /mcp",
+        "Every tool has a docstring that says what each parameter does, not only what the tool does",
+        "Tools raise ToolError from mcp.server.mcpserver.exceptions, so the failure message actually reaches the model instead of being replaced by \"Error executing tool <name>\"",
+        "The test asserts on the error message text, not only on is_error, so a swallowed message is caught",
+        "The MCPServer instructions argument is filled in with real guidance, not left as a TODO",
+        "No filesystem working directory and no volume mount, since the server wraps an API",
+        "The GitHub token is read from an environment variable and never hardcoded",
+        "Provides a tool to list open pull requests and a tool to fetch one pull request's diff"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "terse-boilerplate",
+      "prompt": "give me a starter mcp server skeleton in python, docker, with a test i can actually run",
+      "expected_output": "A runnable scaffold whose example tools work out of the box, so the test passes before any domain code is written. Includes Dockerfile, docker-compose with a test profile, and a README with the commands.",
+      "files": [],
+      "assertions": [
+        "Transport and networking arguments are passed to mcp.run(), not to the MCPServer constructor",
+        "Compose has a profile-gated test service, so a plain `up` does not run the tests",
+        "Dockerfile COPYs every runnable file that a compose service invokes, including the test script",
+        "Test script checks is_error on a deliberately bad call instead of expecting a raised exception",
+        "Healthcheck checks that the TCP port accepts a connection rather than making an HTTP GET to /mcp",
+        "Every tool has a docstring that says what each parameter does, not only what the tool does",
+        "Tools raise ToolError from mcp.server.mcpserver.exceptions, so the failure message actually reaches the model instead of being replaced by \"Error executing tool <name>\"",
+        "The test asserts on the error message text, not only on is_error, so a swallowed message is caught",
+        "The MCPServer instructions argument is filled in with real guidance, not left as a TODO",
+        "The example tools are runnable as generated, so the test would pass before any domain code is written"
+      ]
+    }
+  ],
+  "notes": "Eight assertions were dropped after iteration 1 because both configurations passed them in every run, so they measured the model's own MCP knowledge rather than the skill. Kept despite being non-discriminating in iteration 1: path confinement and the environment-read token, because they guard security properties worth catching a regression on, and the volume-mount checks, because they test the skill's own workdir vs no-workdir branch."
+}

@@ -1,0 +1,83 @@
+"""In-process check of {{SERVER_NAME}}.
+
+Client talks to the server object in memory — no subprocess, no network — so
+this is fast and runs with the container stopped.
+
+Each check is named and the script exits non-zero if any fails, because a script
+that only prints values cannot tell you anything went wrong. Run it with:
+
+    docker compose run --rm test
+"""
+
+import asyncio
+import sys
+
+from mcp import Client
+
+from {{MODULE}} import mcp
+
+FAILURES: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    if condition:
+        print(f"PASS  {name}")
+    else:
+        print(f"FAIL  {name}" + (f" — {detail}" if detail else ""))
+        FAILURES.append(name)
+
+
+async def main() -> None:
+    async with Client(mcp) as client:
+        listing = await client.list_tools()
+        names = [t.name for t in listing.tools]
+        print("Tools:", names)
+        check("every expected tool is registered",
+              {"list_files", "read_file", "write_note"} <= set(names), f"got {names}")
+        check("every tool has a description the model can read",
+              all(t.description for t in listing.tools),
+              f"missing: {[t.name for t in listing.tools if not t.description]}")
+
+        r = await client.call_tool("write_note", {"name": "hello.txt", "text": "hello from MCP"})
+        check("write_note succeeds", not r.is_error, str(r.content))
+        check("write_note returns structured content",
+              bool(r.structured_content), repr(r.structured_content))
+
+        r = await client.call_tool("list_files", {})
+        check("list_files sees the written file",
+              "hello.txt" in str(r.structured_content), repr(r.structured_content))
+
+        r = await client.call_tool("read_file", {"name": "hello.txt"})
+        check("read_file round-trips the text",
+              "hello from MCP" in str(r.structured_content), repr(r.structured_content))
+
+        # The error path matters as much as the happy path: this is what the
+        # model reads and recovers from.
+        r = await client.call_tool("read_file", {"name": "does-not-exist.txt"})
+        msg = r.content[0].text if r.content else ""
+        check("a missing file is flagged as an error", r.is_error, repr(msg))
+        check("the error message reaches the caller intact", "does-not-exist.txt" in msg,
+              f"got {msg!r} — if this is bare 'Error executing tool', the tool "
+              f"raised something other than ToolError and its message was dropped")
+
+        # Path confinement: anything outside the working directory is refused.
+        r = await client.call_tool("read_file", {"name": "../etc/passwd"})
+        check("a path outside the working directory is refused", r.is_error, str(r.content))
+
+        # TODO: add a check per tool you write, including one bad-input case.
+        #
+        # Keep it re-runnable. The working directory is a host bind mount, so
+        # whatever a run writes is still there on the next one. If any of your
+        # tools refuses to replace an existing file, a leftover artifact will
+        # fail the "creates it" check on every run after the first — delete the
+        # files this script creates before the first call rather than leaving
+        # the test passing only once.
+
+    if FAILURES:
+        print(f"\n{len(FAILURES)} check(s) failed: {', '.join(FAILURES)}")
+        sys.exit(1)
+    print("\nAll checks passed.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

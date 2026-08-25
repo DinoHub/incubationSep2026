@@ -1,0 +1,185 @@
+## Authentication and authorization
+
+Every caller needs a bearer token signed by the configured OIDC issuer, and
+each tool separately requires a role:
+
+| Role | Tools it unlocks |
+| --- | --- |
+| `{{ROLE_READ}}` | TODO: list the read-only tools |
+| `{{ROLE_WRITE}}` | TODO: list the tools that change state |
+
+The two failures look different, and the difference is not cosmetic. An MCP
+connection begins with a handshake before any tool is reachable, so a missing or
+invalid token is refused right there with a real **HTTP 401** — no tool code
+runs. A caller who *is* authenticated but lacks a tool's role gets a normal
+session and then a **tool result marked as an error**, naming the role it was
+missing. There is no per-tool HTTP status in MCP.
+
+### Running it locally
+
+The `dev` profile brings up a Keycloak with the realm, roles, and two client
+identities already defined, so this needs no configuration:
+
+```bash
+docker compose --profile dev up -d        # Keycloak + the server
+docker compose run --rm test-auth          # activates its own profile
+```
+
+Keycloak's admin console is at `http://localhost:{{KEYCLOAK_PORT}}/admin`
+(`admin` / `admin`). The realm is defined in `keycloak/realm-export.json` and
+imported on boot, so the identity setup is a reviewable file rather than a
+sequence of clicks someone has to remember.
+
+The realm holds two kinds of identity, because two different things connect to
+this server.
+
+**Machine identities**, for scripts, CI, and the tests. They authenticate as
+themselves with a secret, using the Client Credentials grant:
+
+| Identity | Client ID | Secret | Roles |
+| --- | --- | --- | --- |
+| Read-only | `{{CLIENT_READER}}` | `{{SECRET_READER}}` | `{{ROLE_READ}}` |
+| Read-write | `{{CLIENT_WRITER}}` | `{{SECRET_WRITER}}` | `{{ROLE_READ}}`, `{{ROLE_WRITE}}` |
+
+**Human logins**, for an MCP host that signs a person in. The host uses the
+public client `{{CLIENT_OAUTH}}` and gets a token pair; the roles come from the
+person, not from the host:
+
+| Login | Password | Roles |
+| --- | --- | --- |
+| `{{USER_READER}}` | `{{PASSWORD_READER}}` | `{{ROLE_READ}}` |
+| `{{USER_WRITER}}` | `{{PASSWORD_WRITER}}` | `{{ROLE_READ}}`, `{{ROLE_WRITE}}` |
+
+Those secrets are development credentials committed to the repo on purpose, so
+the stack runs from a clean checkout. They are not a template for real ones.
+
+Two identities rather than one client that picks a role at request time: if a
+single credential could ask for either privilege, holding it *is* holding both,
+and the secret becomes the whole boundary. Separate identities are what make a
+leaked read-only credential merely embarrassing.
+
+### Staying connected: refresh tokens
+
+Access tokens last five minutes. That is deliberate, and it is not something
+you work around by making them last longer — it is what the refresh token is
+for. A host signs in once, receives an access token and a refresh token, and
+when the access token lapses it quietly trades the refresh token for a new one.
+Nobody pastes anything.
+
+Two consequences worth being clear about:
+
+- **Do not register this server with a static `Authorization` header.** A pasted
+  bearer token cannot renew itself, so the connection dies after five minutes
+  and stays dead. A host that sees a header also stops there: Claude Code
+  reports the connection as failed rather than falling back to signing in.
+- **Sign in instead.** Add the server with no header and complete the OAuth flow
+  from the host. The refresh token is stored with the connection and renewed
+  automatically.
+
+```bash
+docker compose --profile dev up -d
+
+# No --header. The 401 tells the host where to sign in; --client-id names the
+# public client in the realm, and --callback-port matches its redirect URI.
+claude mcp add --transport http --scope user \
+  --client-id {{CLIENT_OAUTH}} --callback-port {{CALLBACK_PORT}} \
+  {{SERVER_SLUG}} http://localhost:{{PORT}}/mcp
+
+claude mcp login {{SERVER_SLUG}}      # opens a browser; sign in as {{USER_WRITER}}
+claude mcp list                       # look for: Connected
+```
+
+Both flags are required. Leaving out `--client-id` makes the host attempt
+Dynamic Client Registration, which Keycloak refuses — see [Over HTTP, against
+the container](#over-http-against-the-container) for why relaxing that is not
+the fix.
+
+Sign in as `{{USER_READER}}` instead to get a connection that can read but not
+write. The role is carried by the person who signed in, so which login you use
+is what decides the privilege — not which host asked.
+
+Signing in again later, after the session finally expires, is
+`claude mcp login {{SERVER_SLUG}}`. `claude mcp logout {{SERVER_SLUG}}` discards
+the stored tokens.
+
+#### When there is no browser
+
+CI and headless runs cannot complete an interactive sign-in. Two options:
+
+- Use a machine identity and let the host mint a token per connection with a
+  `headersHelper`, which Claude Code re-runs on every connect and again after a
+  401. That is a re-mint rather than a refresh, and it needs the client secret
+  on the machine:
+
+  ```json
+  {
+    "mcpServers": {
+      "{{SERVER_SLUG}}": {
+        "type": "http",
+        "url": "http://localhost:{{PORT}}/mcp",
+        "headersHelper": "<absolute path to a script printing {\"Authorization\": \"Bearer <token>\"}>"
+      }
+    }
+  }
+  ```
+
+- Or sign in once on a machine that has a browser and copy the stored
+  credentials, accepting that they expire with the session.
+
+### Pointing it at a real provider
+
+Copy `.env.example` to `.env` and set `OIDC_ISSUER` to your provider, then start
+without the `dev` profile:
+
+```bash
+docker compose up -d
+```
+
+Set `OIDC_AUDIENCE` too. Without it, any token your issuer signed is accepted —
+including one minted for a different service entirely. `OIDC_ROLES_CLAIM` needs
+to match where your provider puts roles; the defaults for the common ones are
+listed in `.env.example`.
+
+### Testing it
+
+Two tests, and they cover different things:
+
+```bash
+docker compose run --rm test                        # in-process: roles, fast
+docker compose run --rm test-auth                   # over HTTP: tokens, real
+```
+
+`test_server.py` sets the auth context directly, so it checks every tool's role
+wiring in about a second without Keycloak. It cannot check authentication at
+all — it never crosses the HTTP boundary where tokens are verified. `test_auth.py`
+is what proves the verifier works and that an unsigned caller gets a 401.
+
+### The issuer URL has to be reachable from both sides
+
+Keycloak is pinned to `http://localhost:{{KEYCLOAK_PORT}}` (`KC_HOSTNAME` in
+`docker-compose.yaml`), and that URL is what appears in every token's `iss`
+claim and in the metadata document this server publishes. It has to be spelled
+that way because a host signing in runs on your machine, outside Docker, and
+cannot resolve a service name.
+
+The server container has the opposite problem — it cannot resolve `localhost`
+to Keycloak — so it fetches signing keys through `OIDC_JWKS_URL`, which points
+at `keycloak:8080` on the Docker network. Both halves are set in
+`docker-compose.yaml`. Against a real provider neither applies: one public URL
+works from everywhere, so leave `OIDC_JWKS_URL` unset.
+
+Getting this wrong produces a 401 that looks exactly like a broken verifier,
+which is why `test_auth.py` asserts on what the metadata document advertises.
+
+### What is deliberately not covered
+
+Token audience is unset by default, and the bundled Keycloak runs in
+`start-dev` mode over plain HTTP with a fixed admin password. That is a
+development identity provider, not a deployment.
+
+The `{{CLIENT_OAUTH}}` client also has the password grant enabled, which hands
+a client the user's password directly — the thing the authorization-code flow
+exists to avoid. It is on for one reason: it lets `test_auth.py` obtain a real
+refresh token without driving a browser. Turn it off
+(`directAccessGrantsEnabled: false` in `keycloak/realm-export.json`) in any
+realm that matters, and accept that the refresh checks then need a browser.
