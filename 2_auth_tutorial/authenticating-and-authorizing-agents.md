@@ -2,9 +2,8 @@
 
 This guide stands up a real OAuth 2.1 identity for an agent, an **MCP server**
 that verifies that identity, and two agents with different privilege levels
-calling it — first as plain scripts, then as an LLM deciding for itself which
-tool to call from a natural-language request, so you can see the same
-authorization boundary hold up against a model instead of just a script.
+calling it as plain scripts, so you can see the same authorization boundary
+hold or refuse each call.
 
 The resource server follows the [MCP authorization tutorial](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/authorization#python)'s
 Python approach — `MCPServer` with a `token_verifier` and `AuthSettings` — but
@@ -14,6 +13,20 @@ the tutorial explains the trade-off in Step 2.
 
 The setup was run against **Keycloak 26.0**, **`mcp` 2.1.0**, and **PyJWT
 2.13** (current stable lines as of August 2026) before being written down.
+
+## Contents
+
+- [Authentication vs. authorization, for an agent specifically](#authentication-vs-authorization-for-an-agent-specifically)
+- [What you're building](#what-youre-building)
+- [Prerequisites](#prerequisites)
+- [Step 1 — Define the realm: two agents, two roles](#step-1--define-the-realm-two-agents-two-roles)
+- [Step 2 — Write the resource server](#step-2--write-the-resource-server)
+- [Step 3 — Write the agent, and the container files](#step-3--write-the-agent-and-the-container-files)
+- [Step 4 — Compose the whole stack](#step-4--compose-the-whole-stack)
+- [Step 5 — Build, run, and watch the boundary hold](#step-5--build-run-and-watch-the-boundary-hold)
+- [Step 6 — Run the automated check](#step-6--run-the-automated-check)
+- [Where to go from here](#where-to-go-from-here)
+- [Quick reference](#quick-reference)
 
 ## Authentication vs. authorization, for an agent specifically
 
@@ -67,11 +80,6 @@ it one:
 - **Two agents**, same code, different credentials — one holds only
   `tools:read`, the other holds `tools:read` and `tools:write` — to make the
   authorization boundary concrete rather than theoretical.
-- **An LLM-driven variant of both agents** (Step 7) that takes a plain-English
-  request instead of a CLI argument and discovers the server's tools for
-  itself, via a model served locally through Ollama — so the same
-  authorization failure you see from a scripted call is something you can
-  also watch a model run into and report back on its own.
 
 ```
  agent-reader ──┐                          ┌── verifies signature + issuer (401 if bad)
@@ -91,9 +99,9 @@ it one:
 - **No external accounts or API keys.** Keycloak runs locally in a container
   and is its own authority — nothing leaves your machine.
 
-You'll create nine files: the realm definition, the resource server, a
-scripted agent client, an LLM-driven agent, a healthcheck, a test script,
-`requirements.txt`, a `Dockerfile`, and `docker-compose.yaml`.
+You'll create eight files: the realm definition, the resource server, a
+scripted agent client, a healthcheck, a test script, `requirements.txt`, a
+`Dockerfile`, and `docker-compose.yaml`.
 
 ---
 
@@ -481,9 +489,7 @@ except OSError:
     sys.exit(1)
 ```
 
-`requirements.txt` — `openai` is only used by the LLM-driven agent from Step
-7, not by the resource server or the scripted client, but it's cheap to
-install once now:
+`requirements.txt`:
 
 ```
 mcp>=2,<3
@@ -491,13 +497,10 @@ pydantic>=2
 pyjwt[crypto]>=2.9
 httpx2>=2
 requests>=2.32
-openai>=1.40      # only needed by agent_llm.py, not the server
 ```
 
 `Dockerfile` — the app runs as a non-root user; note the pre-existing `files/`
-directory this depends on, explained below. It also copies `agent_llm.py`,
-which you'll write in Step 7 — copying it now means one image serves every
-step in this tutorial:
+directory this depends on, explained below:
 
 ```dockerfile
 # syntax=docker/dockerfile:1
@@ -512,7 +515,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY tool_server.py agent_client.py agent_llm.py test_auth.py healthcheck.py ./
+COPY tool_server.py agent_client.py test_auth.py healthcheck.py ./
 
 RUN useradd --create-home appuser && mkdir -p /app/files && chown appuser /app/files
 USER appuser
@@ -520,10 +523,6 @@ USER appuser
 EXPOSE 8000
 CMD ["python", "tool_server.py"]
 ```
-
-(If you'd rather write `agent_llm.py` when you get to Step 7, just create an
-empty file with that name for now — the `COPY` needs it to exist, but nothing
-runs it until then.)
 
 ## Step 4 — Compose the whole stack
 
@@ -627,67 +626,11 @@ services:
       AGENT_CLIENT_ID: agent-writer
       AGENT_CLIENT_SECRET: writer-secret
     entrypoint: ["python", "agent_client.py"]
-
-  # --- LLM-driven agents (profile: llm), see Step 7 -----------------------
-  # Same two identities, same tool server — but now a model decides which
-  # tool to call from a plain-English request, instead of a CLI argument
-  # telling it exactly what to do. The authorization boundary doesn't care
-  # which one is asking.
-
-  ollama:
-    image: ollama/ollama:latest
-    profiles: ["llm"]
-    ports:
-      - "11434:11434"        # host:container
-    volumes:
-      - ollama-models:/root/.ollama
-
-  agent-llm-reader:
-    build: .
-    image: agent-tool-server:latest
-    profiles: ["llm"]
-    depends_on:
-      tool-server:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    environment:
-      TOKEN_URL: http://keycloak:8080/realms/agents/protocol/openid-connect/token
-      TOOL_SERVER_URL: http://tool-server:8000/mcp
-      AGENT_CLIENT_ID: agent-reader
-      AGENT_CLIENT_SECRET: reader-secret
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://ollama:11434/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-qwen3:8b}
-      OPENAI_API_KEY: "ollama"   # any non-empty string; the local server ignores it
-    entrypoint: ["python", "agent_llm.py"]
-
-  agent-llm-writer:
-    build: .
-    image: agent-tool-server:latest
-    profiles: ["llm"]
-    depends_on:
-      tool-server:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    environment:
-      TOKEN_URL: http://keycloak:8080/realms/agents/protocol/openid-connect/token
-      TOOL_SERVER_URL: http://tool-server:8000/mcp
-      AGENT_CLIENT_ID: agent-writer
-      AGENT_CLIENT_SECRET: writer-secret
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://ollama:11434/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-qwen3:8b}
-      OPENAI_API_KEY: "ollama"
-    entrypoint: ["python", "agent_llm.py"]
-
-volumes:
-  ollama-models:
 ```
 
-`agent-reader` and `agent-writer` sit behind an `agents` profile, and the
-Ollama-backed pieces behind an `llm` profile, so a bare `docker compose up`
-starts only the always-on pieces — Keycloak and the tool server — and doesn't
-try to run agents or pull a multi-gigabyte model as long-lived services.
+`agent-reader` and `agent-writer` sit behind an `agents` profile, so a bare
+`docker compose up` starts only the always-on pieces — Keycloak and the tool
+server — and doesn't try to run the agents as long-lived services.
 
 Before the first run, create the mounted files directory yourself, owned by
 your own user:
@@ -941,196 +884,6 @@ All checks passed.
 
 That's real output from these exact files.
 
-## Step 7 — Put a model in the loop
-
-Everything so far has been a script deciding what to call — `agent_client.py`
-takes `list`, `read`, `write`, or `delete` as a literal CLI argument and does
-exactly that. That's authentication and authorization working, but it isn't
-yet an *agent* in the sense of something making its own decision about which
-tool a request calls for.
-
-`agent_llm.py` is the same shape as `agent_client.py` — get a token, open the
-MCP connection with it attached — except after that, a model takes over. It
-calls `list_tools()` on the real connection (the exact call `agent_client.py`
-made in Step 5) to see what's on offer, then decides for itself what to call,
-in what order, reading each result before deciding the next step — the same
-tool-use loop as `mcp_tutorial`'s `agent_local.py`. The part worth watching
-for: the model never gets to bypass the resource server's role check. It's
-just another caller with a bearer token, and if that token's identity lacks
-the role, it gets the same tool-call error a script would. Create
-`agent_llm.py`:
-
-```python
-import asyncio
-import json
-import os
-import sys
-
-import httpx2
-import requests
-from openai import OpenAI
-
-from mcp import Client
-from mcp.client.streamable_http import streamable_http_client
-
-TOKEN_URL = os.environ["TOKEN_URL"]
-CLIENT_ID = os.environ["AGENT_CLIENT_ID"]
-CLIENT_SECRET = os.environ["AGENT_CLIENT_SECRET"]
-TOOL_SERVER_URL = os.environ.get("TOOL_SERVER_URL", "http://tool-server:8000/mcp")
-
-BASE_URL = os.environ.get("OPENAI_BASE_URL", "http://ollama:11434/v1")  # Ollama
-MODEL = os.environ.get("OPENAI_MODEL", "qwen3:8b")
-API_KEY = os.environ.get("OPENAI_API_KEY", "ollama")  # non-empty; local server ignores it
-MAX_STEPS = 8
-
-
-def get_token() -> str:
-    resp = requests.post(
-        TOKEN_URL,
-        data={"grant_type": "client_credentials", "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET},
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
-
-
-def to_openai_tools(mcp_tools) -> list[dict]:
-    """MCP's input_schema is already JSON-schema; wrap it in OpenAI's function
-    shape. Same helper as mcp_tutorial's agent_local.py — the model sees
-    real tool definitions discovered from the server, not ones hand-written
-    for it here."""
-    return [
-        {"type": "function", "function": {
-            "name": t.name, "description": t.description or "", "parameters": t.input_schema,
-        }}
-        for t in mcp_tools
-    ]
-
-
-def text_of(result) -> str:
-    parts = [b.text for b in result.content if getattr(b, "type", None) == "text"]
-    return "\n".join(parts) if parts else "(no textual output)"
-
-
-async def run(request: str) -> str:
-    token = get_token()
-    llm = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"})
-    transport = streamable_http_client(TOOL_SERVER_URL, http_client=http_client)
-
-    async with Client(transport) as mcp_client:
-        listing = await mcp_client.list_tools()
-        tools = to_openai_tools(listing.tools)
-        messages: list = [
-            {
-                "role": "system",
-                "content": (
-                    f"You are an agent authenticated to the tool server as the Keycloak "
-                    f"client '{CLIENT_ID}'. Its access token determines what you're allowed "
-                    f"to do, not you. If a tool call fails because this identity's role "
-                    f"doesn't permit the action, report that to the user plainly instead of "
-                    f"retrying the same call or trying to work around it."
-                ),
-            },
-            {"role": "user", "content": request},
-        ]
-
-        for _ in range(MAX_STEPS):
-            resp = llm.chat.completions.create(model=MODEL, messages=messages, tools=tools, temperature=0)
-            msg = resp.choices[0].message
-
-            if not msg.tool_calls:
-                print("\nAgent:", msg.content)
-                return msg.content or ""
-
-            messages.append(msg)
-            for call in msg.tool_calls:
-                args = json.loads(call.function.arguments or "{}")
-                print(f"  -> {call.function.name}({args})")
-                result = await mcp_client.call_tool(call.function.name, args)
-                text = text_of(result)
-                print(f"     {'ERROR: ' if result.is_error else ''}{text}")
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": text})
-
-        return "Stopped: hit the step limit."
-
-
-if __name__ == "__main__":
-    request = sys.argv[1] if len(sys.argv) > 1 else "List the files you can see."
-    print(f"Authenticated as {CLIENT_ID!r}. Request: {request!r}")
-    asyncio.run(run(request))
-```
-
-The system prompt is doing real work here: it tells the model what a tool
-error in this context *means* (a role the identity doesn't have, not a bug to
-route around) — without it, some models will retry the same call a few times
-or try a workaround before giving up, which burns steps and looks like the
-model "getting confused" when actually the resource server behaved exactly
-as designed.
-
-Bring up Ollama and pull a tool-calling model into it — no API key anywhere,
-nothing leaves your machine:
-
-```bash
-docker compose --profile llm up -d ollama
-docker compose exec ollama ollama pull qwen3:8b
-```
-
-(As in `mcp_tutorial`: use `exec` against the already-running `ollama`
-container, not `run`, which would start a fresh container with no server for
-the CLI to talk to. `qwen3:8b` is a solid small default as of mid-2026 —
-Apache 2.0, native tool support; check any model you swap in with
-`ollama show <model>` for `tools` under Capabilities.)
-
-Now ask the write-capable agent to do something in one sentence, chaining two
-tool calls:
-
-```bash
-docker compose --profile llm run --rm agent-llm-writer "Write a short note that says 'ocean tutorial demo' to a file called ocean.txt, then read it back to confirm it saved correctly."
-```
-
-```
-Authenticated as 'agent-writer'. Request: "Write a short note that says 'ocean tutorial demo' to a file called ocean.txt, then read it back to confirm it saved correctly."
-  -> write_file({'name': 'ocean.txt', 'content': 'ocean tutorial demo'})
-     {
-  "name": "ocean.txt",
-  "bytes_written": 19
-}
-  -> read_file({'name': 'ocean.txt'})
-     ocean tutorial demo
-
-Agent: The file `ocean.txt` has been successfully written and read back. Here's the confirmation:
-
-**Written content:**
-`ocean tutorial demo`
-
-**Bytes written:**
-19 (matches the length of the text)
-
-The file contents match exactly, so the operation is complete.
-```
-
-Then ask the *read-only* identity to delete that same file:
-
-```bash
-docker compose --profile llm run --rm agent-llm-reader "Delete the file ocean.txt."
-```
-
-```
-Authenticated as 'agent-reader'. Request: 'Delete the file ocean.txt.'
-  -> delete_file({'name': 'ocean.txt'})
-     ERROR: Error executing tool delete_file: 'service-account-agent-reader' has roles ['tools:read'], but this action needs 'tools:write'.
-
-Agent: The deletion failed because the 'agent-reader' identity only has the 'tools:read' role, but deleting files requires the 'tools:write' role. This action cannot be completed with the current permissions.
-```
-
-This is the whole tutorial in one transcript: the model discovered the
-server's real tools over an authenticated MCP connection, picked the right
-one for a plain-English instruction, and reported the authorization failure
-that came back — without the resource server ever needing to know or care
-that a model, rather than a script, was the one asking. (Both transcripts
-above are real output from these exact files — CPU inference, no GPU.)
-
 ## Where to go from here
 
 - **Set and verify an audience (`aud`) claim.** This tutorial's resource
@@ -1195,9 +948,5 @@ above are real output from these exact files — CPU inference, no GPU.)
 | Read-write agent writes (expect OK) | `docker compose --profile agents run --rm agent-writer write x.txt "hi"` |
 | See a real 401 (no MCP session ever opens) | `curl -i http://localhost:8010/mcp -X POST -d '{}'` |
 | Fetch the Protected Resource Metadata doc | `curl http://localhost:8010/.well-known/oauth-protected-resource` |
-| Serve the local model | `docker compose --profile llm up -d ollama` |
-| Pull a tool-capable model | `docker compose exec ollama ollama pull qwen3:8b` |
-| Ask the LLM-driven writer agent | `docker compose --profile llm run --rm agent-llm-writer "your request"` |
-| Ask the LLM-driven reader agent | `docker compose --profile llm run --rm agent-llm-reader "your request"` |
 | Keycloak admin console | `http://localhost:8080/admin` (admin / admin) |
 | Stop everything | `docker compose down` |
