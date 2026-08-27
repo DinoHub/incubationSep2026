@@ -1,0 +1,126 @@
+{
+  "realm": "{{REALM}}",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 86400,
+  "roles": {
+    "realm": [
+      {
+        "name": "{{ROLE_READ}}",
+        "description": "May call the read-only tools"
+      },
+      {
+        "name": "{{ROLE_WRITE}}",
+        "description": "May call the tools that change state"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "{{CLIENT_READER}}",
+      "name": "Read-only caller (machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "{{SECRET_READER}}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "authorizationServicesEnabled": false
+    },
+    {
+      "clientId": "{{CLIENT_WRITER}}",
+      "name": "Read-write caller (machine)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "{{SECRET_WRITER}}",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "authorizationServicesEnabled": false
+    },
+    {
+      "clientId": "{{CLIENT_OAUTH}}",
+      "name": "Interactive MCP host (OAuth 2.1 + PKCE)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "serviceAccountsEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:{{CALLBACK_PORT}}/callback",
+        "http://127.0.0.1:{{CALLBACK_PORT}}/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "fullScopeAllowed": true
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-{{CLIENT_READER}}",
+      "enabled": true,
+      "serviceAccountClientId": "{{CLIENT_READER}}",
+      "realmRoles": [
+        "{{ROLE_READ}}"
+      ]
+    },
+    {
+      "username": "service-account-{{CLIENT_WRITER}}",
+      "enabled": true,
+      "serviceAccountClientId": "{{CLIENT_WRITER}}",
+      "realmRoles": [
+        "{{ROLE_READ}}",
+        "{{ROLE_WRITE}}"
+      ]
+    },
+    {
+      "username": "{{USER_READER}}",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Reader",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "{{PASSWORD_READER}}",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-{{REALM}}",
+        "{{ROLE_READ}}"
+      ],
+      "requiredActions": [],
+      "email": "{{USER_READER}}@example.invalid"
+    },
+    {
+      "username": "{{USER_WRITER}}",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Dev",
+      "lastName": "Writer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "{{PASSWORD_WRITER}}",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-{{REALM}}",
+        "{{ROLE_READ}}",
+        "{{ROLE_WRITE}}"
+      ],
+      "requiredActions": [],
+      "email": "{{USER_WRITER}}@example.invalid"
+    }
+  ]
+}

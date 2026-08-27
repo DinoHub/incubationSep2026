@@ -1,6 +1,6 @@
 # incubationSep2026
 
-This repository contains 2 tutorials:
+This repository contains 3 tutorials and 1 skills folder:
 
 ## [1_mcp_tutorial](1_mcp_tutorial/)
 
@@ -21,3 +21,25 @@ privilege levels calling it — first as plain scripts, then as an LLM
 deciding which tool to call.
 
 - [authenticating-and-authorizing-agents.md](2_auth_tutorial/authenticating-and-authorizing-agents.md) — the full walkthrough
+
+## [3_mcp_skills](3_mcp_skills/)
+
+Claude Code skills that automate the two tutorials above. Symlinked into
+`.claude/skills/` so Claude Code can discover and invoke them directly.
+
+- [mcp-server-scaffold](3_mcp_skills/mcp-server-scaffold/) — scaffold a complete, runnable MCP server project on the `mcp` Python SDK v2
+- [mcp-server-auth](3_mcp_skills/mcp-server-auth/) — add OAuth 2.1 authentication and per-tool role authorization to an existing MCP server project
+
+## [4_skills_tutorial](4_skills_tutorial/)
+
+How to write the skills themselves. Deep-dives the progressive-disclosure model
+behind agent skills (metadata → instructions → bundled resources), the `SKILL.md`
+frontmatter and description that drive discovery, and the authoring best
+practices — conciseness, degrees of freedom, workflows/feedback loops, scripts,
+testing and iteration. Then compares the three ecosystems that converged on the
+idea — Anthropic Agent Skills, Cursor rules, and OpenAI Codex `AGENTS.md` — so
+guidance travels across agents. Sourced from the current Claude, Cursor, and
+Codex docs (August 2026).
+
+- [writing-skills-for-agents.md](4_skills_tutorial/writing-skills-for-agents.md) — the full walkthrough
+- [skill_template/](4_skills_tutorial/skill_template/) — copy-and-fill starter: annotated `SKILL.md`, a reference stub, and a script stub

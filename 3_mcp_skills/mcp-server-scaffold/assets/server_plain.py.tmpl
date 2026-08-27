@@ -1,0 +1,88 @@
+"""{{SERVER_NAME}} — an MCP server.
+
+Run over stdio:            python {{MODULE}}.py
+Run over Streamable HTTP:  python http_server.py
+"""
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+
+# ToolError is the one exception whose message reaches the model. Anything else
+# is wrapped as "Error executing tool <name>" with your text withheld, so use
+# this for every failure the model is meant to read and recover from. It lives
+# only on this path — it is not re-exported from mcp or mcp.server.
+from mcp.server.mcpserver.exceptions import ToolError
+
+mcp = MCPServer(
+    "{{SERVER_NAME}}",
+    instructions=(
+        # TODO: the model reads this before anything else. Say what the server
+        # is for and spell out ordering constraints ("call search before
+        # fetch"). Vague instructions here cost you wasted tool calls later.
+        "TODO: describe what this server is for and how its tools fit together."
+    ),
+)
+
+
+# ---- Structured return types ---------------------------------------------
+# Returning a BaseModel hands the host a schema and parseable structured
+# content instead of a wall of text. Plain types (str, int, list[str]) are
+# fine for simple tools.
+
+class EchoResult(BaseModel):
+    """What echo returns."""
+
+    original: str
+    transformed: str
+    length: int
+
+
+# ---- Tools ----------------------------------------------------------------
+# The type hints ARE the input schema — the SDK generates it, so you never
+# hand-write JSON Schema. The docstring is what the model reads to decide
+# whether to call a tool, so say what it does and how each parameter behaves.
+#
+# TODO: replace these two with your own tools. They are real and runnable so
+# you can prove the stack works before writing any domain logic.
+
+@mcp.tool()
+def ping() -> str:
+    """Check that the server is reachable. Returns "ok"."""
+    return "ok"
+
+
+@mcp.tool()
+def echo(text: str, upper: bool = False) -> EchoResult:
+    """Echo text back. Set upper to true to upper-case the result."""
+    if not text.strip():
+        # ToolError reaches the model verbatim, so say what to do next. A bare
+        # ValueError here would arrive as "Error executing tool echo" with this
+        # sentence dropped, leaving the model nothing to act on.
+        raise ToolError("text must not be empty. Pass the string you want echoed.")
+    transformed = text.upper() if upper else text
+    return EchoResult(original=text, transformed=transformed, length=len(transformed))
+
+
+# ---- Resources ------------------------------------------------------------
+# Read-only context the host can fetch at a URI without spending a model turn.
+# Uncomment and adapt if you need it.
+
+# @mcp.resource("{{URI_SCHEME}}://info")
+# def server_info() -> str:
+#     """Static information about this server."""
+#     return "TODO: resource content"
+
+
+# ---- Prompts --------------------------------------------------------------
+# Reusable, parameterized message templates the host can offer the user, often
+# as a slash command. Uncomment and adapt if you need it.
+
+# @mcp.prompt()
+# def example_prompt(topic: str) -> str:
+#     """TODO: describe when a user would reach for this prompt."""
+#     return f"TODO: prompt text about {topic}"
+
+
+if __name__ == "__main__":
+    mcp.run()  # stdio by default

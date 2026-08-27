@@ -1,0 +1,29 @@
+services:
+  mcp-server:
+    build: .
+    image: mcp-country-info:latest
+    ports:
+      - "8001:8001"          # host:container
+    environment:
+      PORT: "8001"
+      # A free key comes from https://restcountries.com/sign-up. Without
+      # one the tools refuse every call rather than return the demo key's
+      # canned sample as if it were real data.
+      RESTCOUNTRIES_API_KEY: "${RESTCOUNTRIES_API_KEY:-}"
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # Runs the in-process check, then exits. Profile-gated so a plain `up` skips
+  # it. It does not need mcp-server running — it runs the server in-process.
+  test:
+    build: .
+    image: mcp-country-info:latest
+    profiles: ["test"]
+    environment:
+      RESTCOUNTRIES_API_KEY: "${RESTCOUNTRIES_API_KEY:-}"
+    command: ["python", "test_server.py"]

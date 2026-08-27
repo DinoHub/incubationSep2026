@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT={{PORT}}
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Every runnable file has to be copied in before the first build, the test
+# script included — the compose services below run them from the image.
+COPY {{MODULE}}.py http_server.py test_server.py healthcheck.py ./
+# {{IF_WORKDIR}}
+COPY seed_data.py ./
+# {{END_WORKDIR}}
+
+RUN useradd --create-home appuser && chown -R appuser /app
+# {{IF_WORKDIR}}
+RUN mkdir -p /app/{{WORK_DIR}} && chown -R appuser /app/{{WORK_DIR}}
+# {{END_WORKDIR}}
+USER appuser
+
+EXPOSE {{PORT}}
+CMD ["python", "http_server.py"]

@@ -1,0 +1,17 @@
+"""Container healthcheck.
+
+/mcp rejects a plain GET because it needs MCP's own headers and session
+handling — with 406 or 400 depending on the Accept header sent, so keying a
+check to either status is fragile. What actually matters is whether the port is
+accepting connections. Stdlib only, so it adds nothing to the image.
+"""
+
+import os
+import socket
+import sys
+
+port = int(os.environ.get("PORT", "8001"))
+try:
+    socket.create_connection(("127.0.0.1", port), timeout=3).close()
+except OSError:
+    sys.exit(1)

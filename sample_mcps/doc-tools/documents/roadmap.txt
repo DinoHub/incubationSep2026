@@ -1,0 +1,5 @@
+Q3 roadmap
+
+1. Importer, behind a flag.
+2. Migration tooling, including rollback.
+3. Search over archived documents.

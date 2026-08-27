@@ -1,0 +1,133 @@
+"""{{SERVER_NAME}} — an MCP server.
+
+Every tool in here works inside one directory ({{WORK_DIR}}/). Confining paths
+to a single folder is what stops a model from reading or writing arbitrary
+files, so keep that shape even after you replace the example tools.
+
+Run over stdio:            python {{MODULE}}.py
+Run over Streamable HTTP:  python http_server.py
+"""
+
+import os
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from mcp.server import MCPServer
+
+# ToolError is the one exception whose message reaches the model. Anything else
+# is wrapped as "Error executing tool <name>" with your text withheld, so use
+# this for every failure the model is meant to read and recover from. It lives
+# only on this path — it is not re-exported from mcp or mcp.server.
+from mcp.server.mcpserver.exceptions import ToolError
+
+# The one directory every tool is allowed to touch.
+WORK_DIR = Path(os.environ.get("{{WORK_DIR_ENV}}", "{{WORK_DIR}}")).resolve()
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+
+mcp = MCPServer(
+    "{{SERVER_NAME}}",
+    instructions=(
+        # TODO: the model reads this before anything else. Say what the server
+        # is for and spell out ordering constraints ("call list_files before
+        # read_file"). Vague instructions here cost you wasted tool calls later.
+        "TODO: describe what this server is for and how its tools fit together."
+    ),
+)
+
+
+# ---- Structured return types ---------------------------------------------
+# Returning a BaseModel hands the host a schema and parseable structured
+# content instead of a wall of text. Plain types (str, int, list[str]) are
+# fine for simple tools.
+
+class FileInfo(BaseModel):
+    """What read_file returns."""
+
+    name: str
+    size_bytes: int
+    text: str
+
+
+class WriteResult(BaseModel):
+    """What write_note returns."""
+
+    name: str
+    size_bytes: int
+
+
+# ---- Helpers --------------------------------------------------------------
+
+def _resolve(name: str) -> Path:
+    """Resolve a name to a path, refusing anything outside WORK_DIR."""
+    p = (WORK_DIR / name).resolve()
+    if p.parent != WORK_DIR:
+        raise ToolError(f"{name!r} is outside the working directory.")
+    return p
+
+
+# ---- Tools ----------------------------------------------------------------
+# The type hints ARE the input schema — the SDK generates it, so you never
+# hand-write JSON Schema. The docstring is what the model reads to decide
+# whether to call a tool, so say what it does and how each parameter behaves.
+#
+# TODO: replace these three with your own tools. They are real and runnable so
+# you can prove the stack works before writing any domain logic.
+
+@mcp.tool()
+def list_files() -> list[str]:
+    """List the files available in the working directory."""
+    return sorted(p.name for p in WORK_DIR.iterdir() if p.is_file())
+
+
+@mcp.tool()
+def read_file(name: str) -> FileInfo:
+    """Read a text file from the working directory.
+
+    Call list_files first if you do not already know the filename.
+    """
+    p = _resolve(name)
+    if not p.exists():
+        # ToolError reaches the model verbatim, so say what to do next. A bare
+        # ValueError here would arrive as "Error executing tool read_file" with
+        # this sentence dropped, leaving the model nothing to act on.
+        raise ToolError(f"No such file: {name!r}. Call list_files to see what's there.")
+    return FileInfo(
+        name=name,
+        size_bytes=p.stat().st_size,
+        text=p.read_text(encoding="utf-8", errors="replace"),
+    )
+
+
+@mcp.tool()
+def write_note(name: str, text: str) -> WriteResult:
+    """Write text to a file in the working directory, replacing it if it exists."""
+    if not name.strip():
+        raise ToolError("name must not be empty. Pass the filename to write to.")
+    p = _resolve(name)
+    p.write_text(text, encoding="utf-8")
+    return WriteResult(name=name, size_bytes=p.stat().st_size)
+
+
+# ---- Resources ------------------------------------------------------------
+# Read-only context the host can fetch at a URI without spending a model turn.
+# Uncomment and adapt if you need it.
+
+# @mcp.resource("{{URI_SCHEME}}://info")
+# def server_info() -> str:
+#     """Static information about this server."""
+#     return "TODO: resource content"
+
+
+# ---- Prompts --------------------------------------------------------------
+# Reusable, parameterized message templates the host can offer the user, often
+# as a slash command. Uncomment and adapt if you need it.
+
+# @mcp.prompt()
+# def example_prompt(topic: str) -> str:
+#     """TODO: describe when a user would reach for this prompt."""
+#     return f"TODO: prompt text about {topic}"
+
+
+if __name__ == "__main__":
+    mcp.run()  # stdio by default

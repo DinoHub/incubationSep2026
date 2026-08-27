@@ -1,0 +1,5 @@
+      # The in-process test never verifies a token, so this only has to be a
+      # syntactically valid URL — nothing ever contacts it. Pointing it somewhere
+      # deliberately useless is the reminder that test_server.py does not and
+      # cannot test authentication; test_auth.py is what does.
+      OIDC_ISSUER: http://issuer-not-used-by-in-process-test.invalid

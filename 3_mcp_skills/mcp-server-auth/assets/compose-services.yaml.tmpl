@@ -1,0 +1,75 @@
+
+  # --- Local identity provider (profile: dev) -----------------------------
+  # Issues and signs tokens; owns the realm, the client identities, and the
+  # roles they hold. Profile-gated because production has a real provider —
+  # there you set OIDC_ISSUER in .env and never start this service.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    # In both profiles on purpose. `docker compose run` activates only the
+    # target service's own profiles, not its dependencies', so test-auth would
+    # fail with "no such service: keycloak" if this were in "dev" alone.
+    profiles: ["dev", "auth-test"]
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Pin the issuer URL. Left alone, Keycloak stamps `iss` with whatever
+      # hostname the token was requested through, so a token fetched from your
+      # machine on localhost and one fetched from a container on the Docker
+      # network disagree about who issued them, and one of the two is always
+      # rejected with a 401 that looks exactly like a broken verifier.
+      KC_HOSTNAME: http://localhost:{{KEYCLOAK_PORT}}
+      # ...but let the token and key endpoints answer on whichever hostname
+      # they were reached through, so containers can still talk to keycloak:8080
+      # while browsers and tokens use localhost.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    ports:
+      - "{{KEYCLOAK_PORT}}:8080"          # host:container — admin console at /admin
+    healthcheck:
+      # This image ships no curl or wget, and a bare TCP connect is enough:
+      # the port only opens once the realm import has finished.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  # Full-stack auth check: real tokens, over HTTP, against the running server.
+  # This is the only test that exercises authentication — the in-process
+  # test_server.py cannot, because it never goes through the HTTP layer where
+  # tokens are checked.
+  test-auth:
+    build: .
+    image: {{IMAGE_NAME}}:latest
+    # Its own profile, not "dev": a profile-gated service still gets started by
+    # `up`, and this one is a test that runs and exits. `docker compose run`
+    # activates the target's profile on its own, so this needs no --profile flag
+    # and, being outside "dev", is not built or started by `--profile dev up`.
+    profiles: ["auth-test"]
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+    environment:
+      TOKEN_URL: http://keycloak:8080/realms/{{REALM}}/protocol/openid-connect/token
+      TARGET_URL: http://mcp-server:{{PORT}}/mcp
+      READER_CLIENT_ID: {{CLIENT_READER}}
+      READER_SECRET: {{SECRET_READER}}
+      WRITER_CLIENT_ID: {{CLIENT_WRITER}}
+      WRITER_SECRET: {{SECRET_WRITER}}
+      ROLE_READ: {{ROLE_READ}}
+      ROLE_WRITE: {{ROLE_WRITE}}
+      # The interactive client and a human login, so the test can prove the
+      # refresh cycle works — that a client can outlive its access token
+      # without a person pasting a new one.
+      OAUTH_CLIENT_ID: {{CLIENT_OAUTH}}
+      OAUTH_USERNAME: {{USER_WRITER}}
+      OAUTH_PASSWORD: {{PASSWORD_WRITER}}
+      # What the server publishes as its authorization server. The test checks
+      # the metadata document against this, because a host that cannot resolve
+      # the issuer cannot sign in, and nothing else would catch that.
+      EXPECTED_ISSUER: http://localhost:{{KEYCLOAK_PORT}}/realms/{{REALM}}
+    command: ["python", "test_auth.py"]
