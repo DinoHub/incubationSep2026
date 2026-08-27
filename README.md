@@ -30,6 +30,19 @@ Claude Code skills that automate the two tutorials above. Symlinked into
 - [mcp-server-scaffold](3_mcp_skills/mcp-server-scaffold/) — scaffold a complete, runnable MCP server project on the `mcp` Python SDK v2
 - [mcp-server-auth](3_mcp_skills/mcp-server-auth/) — add OAuth 2.1 authentication and per-tool role authorization to an existing MCP server project
 
+**Running a skill:** inside a Claude Code session (the `claude` terminal, or
+the IDE extension) — not a plain shell. Either describe what you want in
+plain language and let Claude route to the matching skill on its own, or
+invoke one directly by typing its directory name as a slash command:
+
+```
+/mcp-server-scaffold
+/mcp-server-auth
+```
+
+If you've just added or changed a skill, run `/reload-skills` (or restart the
+session) so Claude Code picks it up.
+
 ## [4_skills_tutorial](4_skills_tutorial/)
 
 How to write the skills themselves. Deep-dives the progressive-disclosure model
