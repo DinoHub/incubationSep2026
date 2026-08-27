@@ -1,6 +1,6 @@
 # incubationSep2026
 
-This repository contains 3 tutorials and 1 skills folder:
+This repository contains 4 tutorials and 1 skills folder:
 
 ## [1_mcp_tutorial](1_mcp_tutorial/)
 
@@ -43,3 +43,17 @@ Codex docs (August 2026).
 
 - [writing-skills-for-agents.md](4_skills_tutorial/writing-skills-for-agents.md) — the full walkthrough
 - [skill_template/](4_skills_tutorial/skill_template/) — copy-and-fill starter: annotated `SKILL.md`, a reference stub, and a script stub
+
+## [5_agent_templates](5_agent_templates/)
+
+Defining agent templates — named specialists (role, system prompt, scoped tool
+access) that get delegated to rather than loaded into the main conversation.
+Builds one real agent end to end (a changelog drafter that reads git history
+and writes `CHANGELOG.md`), then compares how four harnesses — Claude Code,
+Cursor, OpenCode, and Roo Code — each read that idea, including a shortcut
+where a single file already works unmodified in two of them, and a script
+that ports it into the one harness structured differently enough to need it.
+
+- [defining-agent-templates.md](5_agent_templates/defining-agent-templates.md) — the full walkthrough
+- [agent_template/](5_agent_templates/agent_template/) — copy-and-fill starter: annotated agent `.md`, plus a script to port it into Roo Code's `.roomodes`
+
